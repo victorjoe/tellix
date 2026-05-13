@@ -10,7 +10,7 @@ Everything runs locally. No API keys, no cloud upload, no telemetry.
 
 ## Download
 
-Prebuilt `Tellix.exe` is published on the [Releases page](https://github.com/<your-username>/tellix/releases). Grab the latest version, copy it anywhere, double-click to launch. Windows SmartScreen will warn the first time — click **More info → Run anyway**.
+Prebuilt `Tellix.exe` is published on the [Releases page](https://github.com/victorjoe/tellix/releases). Grab the latest version, copy it anywhere, double-click to launch. Windows SmartScreen will warn the first time — click **More info → Run anyway**.
 
 If you'd rather run from source, see the Setup section below.
 
