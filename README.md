@@ -4,6 +4,10 @@ Lightweight Windows screen recorder with live + post-record transcription. Recor
 
 Everything runs locally. No API keys, no cloud upload, no telemetry.
 
+![License: MIT](https://img.shields.io/github/license/victorjoe/tellix)
+![Latest Release](https://img.shields.io/github/v/release/victorjoe/tellix)
+![Downloads](https://img.shields.io/github/downloads/victorjoe/tellix/total)
+
 ![Tellix main window](docs/screenshot.png)
 
 > **Screenshot placeholder** — replace `docs/screenshot.png` with an actual capture of the running app (the recording dialog with the live transcript pane filled). Drop a 30-second demo as `docs/demo.gif` too if you can — Tellix can record itself for this.
