@@ -1,0 +1,59 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- Virtual envs ----
+.venv/
+venv/
+env/
+ENV/
+
+# ---- PyInstaller build artifacts ----
+build/
+dist/
+*.spec.cache
+
+# ---- Tellix-specific ----
+# Bundled FFmpeg binary - NOT redistributed (see NOTICE.md for licensing).
+# Users download their own static FFmpeg build and drop it here.
+bin/ffmpeg.exe
+
+# Recordings written by the app. Almost always contain personal audio/video.
+output/
+
+# Stray editor / Finder backup files
+*.bak
+*.swp
+*.tmp
+* - Copy.*
+*~
+
+# ---- Whisper / HuggingFace caches ----
+# Per-user, normally outside the repo, but ignore if anyone runs HF_HOME locally
+.cache/
+huggingface/
+
+# ---- IDEs ----
+.vscode/
+.idea/
+*.code-workspace
+
+# ---- OS metadata ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Environment / secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Generated PDFs (optional - uncomment to exclude rebuilt copies) ----
+# Tellix-Help.pdf
+# Tellix-Release-Notes-*.pdf
