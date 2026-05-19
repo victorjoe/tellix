@@ -56,6 +56,9 @@ if not ffmpeg_path.exists():
         "and place ffmpeg.exe in the bin\\ folder before building.\n"
     )
 binaries.append((str(ffmpeg_path), "bin"))
+ffmpeg_hash_path = ffmpeg_path.with_suffix(ffmpeg_path.suffix + ".sha256")
+if ffmpeg_hash_path.exists():
+    datas.append((str(ffmpeg_hash_path), "bin"))
 
 
 a = Analysis(
@@ -88,7 +91,9 @@ exe = EXE(
     strip=False,
     upx=False,           # UPX can corrupt ctranslate2 DLLs
     upx_exclude=[],
-    runtime_tmpdir=None,
+    # Extract the one-file bundle beside the executable instead of %TEMP%.
+    # This avoids startup failures on machines with a nearly full C: drive.
+    runtime_tmpdir=".",
     console=False,       # windowed Tk app, no terminal
     disable_windowed_traceback=False,
     argv_emulation=False,

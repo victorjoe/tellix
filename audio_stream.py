@@ -23,6 +23,28 @@ import sounddevice as sd
 END_OF_STREAM = object()
 TARGET_RATE = 16000
 TARGET_CHANNELS = 1
+AUDIO_QUEUE_MAX_CHUNKS = 120
+
+
+def _put_latest(q: "queue.Queue", item) -> None:
+    """Best-effort queue put for real-time audio callbacks.
+
+    If live transcription falls behind, drop the oldest queued chunk rather
+    than blocking an audio callback or allowing unbounded memory growth.
+    """
+    try:
+        q.put_nowait(item)
+        return
+    except queue.Full:
+        pass
+    try:
+        q.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        q.put_nowait(item)
+    except queue.Full:
+        pass
 
 
 def _resample_to_16k_mono(buf, source_rate: int, source_channels: int):
@@ -89,7 +111,7 @@ class AudioCapture:
         self.wav_path = Path(wav_path)
         self.device = device
         self.block_seconds = block_seconds
-        self.chunk_queue = queue.Queue()
+        self.chunk_queue = queue.Queue(maxsize=AUDIO_QUEUE_MAX_CHUNKS)
         self._stream = None
         self._wav = None
         self._wav_lock = threading.Lock()
@@ -149,9 +171,10 @@ class AudioCapture:
         attempts = self._build_attempts()
         last_err = None
         for dev, rate, ch in attempts:
+            stream = None
             try:
                 block = int(rate * self.block_seconds)
-                self._stream = sd.InputStream(
+                stream = sd.InputStream(
                     samplerate=rate,
                     channels=ch,
                     dtype="int16",
@@ -159,12 +182,18 @@ class AudioCapture:
                     blocksize=block,
                     callback=self._on_audio,
                 )
-                self._stream.start()
+                stream.start()
+                self._stream = stream
                 self._source_rate = rate
                 self._source_channels = ch
                 return
             except Exception as e:
                 last_err = e
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
                 continue
 
         # All attempts failed
@@ -190,7 +219,7 @@ class AudioCapture:
         with self._wav_lock:
             if self._wav is not None:
                 self._wav.writeframes(chunk.tobytes())
-        self.chunk_queue.put(chunk)
+        _put_latest(self.chunk_queue, chunk)
 
     def stop(self) -> None:
         if self._stream is not None:
@@ -204,7 +233,7 @@ class AudioCapture:
             if self._wav is not None:
                 self._wav.close()
                 self._wav = None
-        self.chunk_queue.put(END_OF_STREAM)
+        _put_latest(self.chunk_queue, END_OF_STREAM)
 
     @staticmethod
     def list_input_devices() -> List[dict]:
@@ -227,7 +256,7 @@ class LoopbackCapture:
         self.wav_path = Path(wav_path)
         self.device = device
         self.block_seconds = block_seconds
-        self.chunk_queue = queue.Queue()
+        self.chunk_queue = queue.Queue(maxsize=AUDIO_QUEUE_MAX_CHUNKS)
         self._wav = None
         self._wav_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -290,9 +319,9 @@ class LoopbackCapture:
                     while len(self._down_buffer) >= self._target_block:
                         chunk = self._down_buffer[: self._target_block]
                         self._down_buffer = self._down_buffer[self._target_block:]
-                        self.chunk_queue.put(chunk.copy())
+                        _put_latest(self.chunk_queue, chunk.copy())
         except Exception:
-            self.chunk_queue.put(END_OF_STREAM)
+            _put_latest(self.chunk_queue, END_OF_STREAM)
             raise
 
     def stop(self) -> None:
@@ -301,7 +330,7 @@ class LoopbackCapture:
             self._thread.join(timeout=5.0)
             self._thread = None
         if len(self._down_buffer) > 0:
-            self.chunk_queue.put(self._down_buffer.copy())
+            _put_latest(self.chunk_queue, self._down_buffer.copy())
             self._down_buffer = np.zeros(0, dtype=np.int16)
         with self._wav_lock:
             if self._wav is not None:
@@ -310,7 +339,7 @@ class LoopbackCapture:
                 except Exception:
                     pass
                 self._wav = None
-        self.chunk_queue.put(END_OF_STREAM)
+        _put_latest(self.chunk_queue, END_OF_STREAM)
 
     @staticmethod
     def is_available() -> bool:
@@ -339,7 +368,7 @@ class MixingAudioCapture:
             device=loopback_device, block_seconds=block_seconds,
         )
         self.mixed_wav_path = self.session_dir / "mixed.wav"
-        self.chunk_queue = queue.Queue()
+        self.chunk_queue = queue.Queue(maxsize=AUDIO_QUEUE_MAX_CHUNKS)
         self._mixer_thread = None
         self._stop_event = threading.Event()
         self._mixed_wav = None
@@ -399,9 +428,9 @@ class MixingAudioCapture:
 
             if self._mixed_wav is not None:
                 self._mixed_wav.writeframes(mixed.tobytes())
-            self.chunk_queue.put(mixed)
+            _put_latest(self.chunk_queue, mixed)
 
-        self.chunk_queue.put(END_OF_STREAM)
+        _put_latest(self.chunk_queue, END_OF_STREAM)
         if self._mixed_wav is not None:
             try:
                 self._mixed_wav.close()

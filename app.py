@@ -10,15 +10,31 @@ from __future__ import annotations
 
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
+import hashlib
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import List, Optional
+
+
+def _ensure_standard_streams() -> None:
+    """Provide writable streams for windowed PyInstaller builds.
+
+    Some third-party libraries write progress/log output to sys.stderr or
+    sys.stdout while loading models. In a console=False executable those can be
+    None, which causes model initialization to crash before Tellix can recover.
+    """
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+
+
+_ensure_standard_streams()
 
 from recorder import ScreenRecorder
 from audio_stream import AudioCapture, LoopbackCapture, MixingAudioCapture
@@ -39,19 +55,50 @@ else:
     USER_ROOT = APP_ROOT
 
 DEFAULT_OUTPUT_DIR = USER_ROOT / "output"
+CAPTION_QUEUE_MAX_ITEMS = 500
 
 
 def find_ffmpeg() -> str:
-    """Locate ffmpeg.exe: prefer bundled bin/, fall back to PATH."""
+    """Locate the trusted bundled ffmpeg.exe.
+
+    Production builds must not execute an arbitrary ffmpeg from PATH. If a
+    sidecar bin/ffmpeg.exe.sha256 exists, verify the executable before use.
+    """
     bundled = APP_ROOT / "bin" / "ffmpeg.exe"
     if bundled.exists():
+        _verify_sha256_sidecar(bundled)
         return str(bundled)
-    on_path = shutil.which("ffmpeg")
-    if on_path:
-        return on_path
     raise FileNotFoundError(
-        "FFmpeg not found. Place ffmpeg.exe in tellix/bin/ or add it to PATH."
+        "FFmpeg not found. Place the trusted ffmpeg.exe in tellix/bin/."
     )
+
+
+def _verify_sha256_sidecar(path: Path) -> None:
+    sha_path = path.with_suffix(path.suffix + ".sha256")
+    if not sha_path.exists():
+        return
+    expected = sha_path.read_text(encoding="utf-8").strip().split()[0].lower()
+    actual = hashlib.sha256(path.read_bytes()).hexdigest().lower()
+    if actual != expected:
+        raise FileNotFoundError(
+            f"FFmpeg integrity check failed for {path.name}."
+        )
+
+
+def _put_latest_text(q: "queue.Queue[str]", text: str) -> None:
+    try:
+        q.put_nowait(text)
+        return
+    except queue.Full:
+        pass
+    try:
+        q.get_nowait()
+    except queue.Empty:
+        pass
+    try:
+        q.put_nowait(text)
+    except queue.Full:
+        pass
 
 
 class TellixApp:
@@ -81,7 +128,9 @@ class TellixApp:
         self.is_finalizing = False
         self.system_audio_used = False
 
-        self.caption_queue: "queue.Queue[str]" = queue.Queue()
+        self.caption_queue: "queue.Queue[str]" = queue.Queue(
+            maxsize=CAPTION_QUEUE_MAX_ITEMS
+        )
         self._mic_devices: List[dict] = []
 
         self._build_ui()
@@ -230,7 +279,7 @@ class TellixApp:
 
         self.live = LiveTranscriber(
             self.audio.chunk_queue,
-            on_text=lambda t: self.caption_queue.put(t),
+            on_text=self._caption_async,
             model_size=self.model_var.get(),
         )
         self.live.start()
@@ -255,7 +304,12 @@ class TellixApp:
             if self.audio:
                 self.audio.stop()
             if self.recorder:
-                self.recorder.stop()
+                recorder_rc = self.recorder.stop()
+                if recorder_rc != 0:
+                    raise RuntimeError(
+                        "FFmpeg screen capture did not exit cleanly. "
+                        f"Exit code: {recorder_rc}. Check screen.ffmpeg.log."
+                    )
             if self.live:
                 self.live.stop()
 
@@ -264,6 +318,11 @@ class TellixApp:
             final = self.session_dir / "recording.mp4"
             srt_path = self.session_dir / "recording.srt"
             txt_path = self.session_dir / "recording.txt"
+            if not screen.exists() or screen.stat().st_size == 0:
+                raise RuntimeError(
+                    "Screen recording output is missing or empty. "
+                    "Check screen.ffmpeg.log."
+                )
 
             if self.system_audio_used:
                 audio_for_final = self.session_dir / "mixed.wav"
@@ -369,7 +428,7 @@ class TellixApp:
         self.caption_text.config(state=tk.DISABLED)
 
     def _caption_async(self, text: str) -> None:
-        self.caption_queue.put(text)
+        _put_latest_text(self.caption_queue, text)
 
     def _status_async(self, text: str) -> None:
         self.root.after(0, lambda: self.status_var.set(text))

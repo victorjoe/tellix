@@ -17,12 +17,15 @@ ENV/
 # ---- PyInstaller build artifacts ----
 build/
 dist/
+_MEI*/
+.tmp/
 *.spec.cache
 
 # ---- Tellix-specific ----
 # Bundled FFmpeg binary - NOT redistributed (see NOTICE.md for licensing).
 # Users download their own static FFmpeg build and drop it here.
 bin/ffmpeg.exe
+bin/ffmpeg.exe.sha256
 
 # Recordings written by the app. Almost always contain personal audio/video.
 output/
@@ -38,6 +41,7 @@ output/
 # Per-user, normally outside the repo, but ignore if anyone runs HF_HOME locally
 .cache/
 huggingface/
+models/
 
 # ---- IDEs ----
 .vscode/

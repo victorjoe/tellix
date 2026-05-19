@@ -17,9 +17,9 @@ and place ffmpeg.exe in the bin\ folder before building.
     exit 1
 }
 
-# 2. Make sure pyinstaller is installed in the active venv
+# 2. Make sure the pinned PyInstaller version is installed in the active venv
 Write-Host "Checking PyInstaller..." -ForegroundColor Cyan
-python -m pip install --upgrade pyinstaller | Out-Null
+python -m pip install -r requirements-build.txt | Out-Null
 
 # 3. Wipe previous build artifacts so the build is clean
 if (Test-Path .\build) { Remove-Item -Recurse -Force .\build }

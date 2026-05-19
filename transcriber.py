@@ -21,7 +21,11 @@ Notes on settings:
 """
 from __future__ import annotations
 
+import html
+import os
 import queue
+import re
+import sys
 import threading
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
@@ -38,12 +42,68 @@ except ImportError as e:  # pragma: no cover
 from audio_stream import END_OF_STREAM
 
 
+MODEL_REVISIONS = {
+    "tiny": (
+        "Systran/faster-whisper-tiny",
+        "d90ca5fe260221311c53c58e660288d3deb8d356",
+    ),
+    "base": (
+        "Systran/faster-whisper-base",
+        "a80717a3a48b1b28aa687bca146cb7301feae1b1",
+    ),
+    "small": (
+        "Systran/faster-whisper-small",
+        "536b0662742c02347bc0e980a01041f333bce120",
+    ),
+    "medium": (
+        "Systran/faster-whisper-medium",
+        "7832330bcea9a8d5fd6d6637c49fe5d256e98277",
+    ),
+}
+
+
+def _default_model_cache_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent / "models"
+    return Path(__file__).resolve().parent / ".cache" / "huggingface"
+
+
+def _resolve_model(model_size: str) -> str:
+    """Resolve a UI model name to a pinned local Hugging Face snapshot."""
+    model_path = Path(model_size)
+    if model_path.exists():
+        return str(model_path)
+    if model_size not in MODEL_REVISIONS:
+        raise ValueError(f"Unsupported model size: {model_size}")
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as e:  # pragma: no cover
+        raise ImportError(
+            "huggingface-hub is required to download pinned Whisper models."
+        ) from e
+
+    repo_id, revision = MODEL_REVISIONS[model_size]
+    local_files_only = os.environ.get("TELLIX_OFFLINE_MODE") == "1"
+    cache_dir = Path(
+        os.environ.get("TELLIX_MODEL_CACHE", str(_default_model_cache_dir()))
+    )
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return snapshot_download(
+        repo_id=repo_id,
+        revision=revision,
+        cache_dir=str(cache_dir),
+        local_files_only=local_files_only,
+    )
+
+
 def _load_model(model_size: str) -> WhisperModel:
     """Load a Whisper model. Try CUDA first, fall back to CPU on any failure."""
+    model_path = _resolve_model(model_size)
     try:
-        return WhisperModel(model_size, device="cuda", compute_type="float16")
+        return WhisperModel(model_path, device="cuda", compute_type="float16")
     except Exception:
-        return WhisperModel(model_size, device="cpu", compute_type="int8")
+        return WhisperModel(model_path, device="cpu", compute_type="int8")
 
 
 class LiveTranscriber:
@@ -104,6 +164,9 @@ class LiveTranscriber:
                 buffer = buffer[-overlap_samples:]
 
     def _transcribe_buffer(self, buffer: np.ndarray) -> None:
+        if self._model is None:
+            self.on_text("[transcription error: model is not loaded]")
+            return
         audio_f32 = buffer.astype(np.float32) / 32768.0
         try:
             segments, _info = self._model.transcribe(
@@ -148,25 +211,32 @@ def transcribe_file(wav_path: Path, model_size: str = "small",
 
 
 def _format_srt_timestamp(t: float) -> str:
-    if t < 0:
-        t = 0.0
-    h = int(t // 3600)
-    m = int((t % 3600) // 60)
-    s = int(t % 60)
-    ms = int(round((t - int(t)) * 1000))
-    if ms == 1000:
-        ms = 0
-        s += 1
+    total_ms = max(0, int(round(t * 1000)))
+    h, rem = divmod(total_ms, 3600_000)
+    m, rem = divmod(rem, 60_000)
+    s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _sanitize_srt_text(text: str) -> str:
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = text.replace("-->", "->")
+    return html.escape(text, quote=False)
 
 
 def write_srt(segments: List[Segment], srt_path: Path) -> None:
     lines: List[str] = []
-    for i, (start, end, text) in enumerate(segments, 1):
-        lines.append(str(i))
+    cue_number = 1
+    for start, end, text in segments:
+        safe_text = _sanitize_srt_text(text)
+        if not safe_text:
+            continue
+        lines.append(str(cue_number))
         lines.append(f"{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}")
-        lines.append(text)
+        lines.append(safe_text)
         lines.append("")
+        cue_number += 1
     Path(srt_path).write_text("\n".join(lines), encoding="utf-8")
 
 
